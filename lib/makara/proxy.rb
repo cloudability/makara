@@ -65,6 +65,18 @@ module Makara
       Makara::Cache.write("makara::#{@master_context}-#{@id}", '1', @ttl) if write_to_cache
     end
 
+    def stick_to_slaves!
+      @stuck_on_slaves = true
+    end
+
+    def stuck_to_slaves?
+      !!@stuck_on_slaves
+    end
+
+    def release_slaves!
+      @stuck_on_slaves = false
+    end
+
     protected
 
 
@@ -92,8 +104,12 @@ module Makara
     def appropriate_pool(method_name, args)
 
       pool = begin
+        # we are crazy and want always use slaves for our workload.
+        if stuck_to_slaves?
+          @slave_pool
+
         # the args provided absolutely need master
-        if needs_master?(method_name, args)
+        elsif needs_master?(method_name, args)
           stick_to_master(method_name, args)
           @master_pool
 
@@ -162,6 +178,7 @@ module Makara
 
 
     def should_stick?(method_name, args)
+      return false if stuck_to_slaves?
       true
     end
 

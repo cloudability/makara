@@ -88,8 +88,10 @@ module ActiveRecord
 
 
       def should_stick?(method_name, args)
-        sql = args.first
+        # Automatically DON'T stick to master if we are stuck to slaves.
+        return false if stuck_to_slaves?
 
+        sql = args.first
         return true if sql.nil?
         return false if sql.to_s =~ /^show\s([\w]+\s)?(field|table|database|schema|view|index)(es|s)?/i
         return false if sql.to_s =~ /^(set|describe|explain|pragma)\s/i
@@ -103,6 +105,8 @@ module ActiveRecord
       end
 
       def needs_master?(method_name, args)
+        return false if stuck_to_slaves?
+
         sql = args.first
         return false if sql.to_s =~ SQL_SLAVE_MATCHER
         true
@@ -119,8 +123,6 @@ module ActiveRecord
       def active_record_connection_for(config)
         raise NotImplementedError
       end
-
-
     end
   end
 end

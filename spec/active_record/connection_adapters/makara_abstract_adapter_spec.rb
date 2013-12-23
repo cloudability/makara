@@ -72,4 +72,19 @@ describe ActiveRecord::ConnectionAdapters::MakaraAbstractAdapter do
 
   end
 
+  context 'when stuck to slaves' do
+    {
+      'begin transaction' => false,
+      'begin deferred transaction' => false,
+      'commit transaction' => false,
+      'rollback transaction' => false
+    }.each do |sql, should_stick|
+      it "should #{should_stick ? 'stick' : 'not stick'} to master if handling sql like \"#{sql}\"" do
+        proxy = klass.new(config(0,0))
+        proxy.stick_to_slaves!
+
+        expect(proxy.would_stick?(sql)).to eq(should_stick)
+      end
+    end
+  end
 end
