@@ -88,7 +88,6 @@ module ActiveRecord
 
 
       def should_stick?(method_name, args)
-        # Automatically DON'T stick to master if we are stuck to slaves.
         return false if stuck_to_slaves?
 
         sql = args.first
@@ -105,9 +104,9 @@ module ActiveRecord
       end
 
       def needs_master?(method_name, args)
-        return false if stuck_to_slaves?
-
         sql = args.first
+        return true if sql.to_s =~ /for update$/i
+        return false if stuck_to_slaves?
         return false if sql.to_s =~ SQL_SLAVE_MATCHER
         true
       end
