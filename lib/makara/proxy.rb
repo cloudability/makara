@@ -65,6 +65,11 @@ module Makara
       Makara::Cache.write("makara::#{@master_context}-#{@id}", '1', @ttl) if write_to_cache
     end
 
+    def release_master!
+      # TODO: What to do about the cache...?
+      @master_context = nil
+    end
+
     def stick_to_slaves!
       @stuck_on_slaves = true
     end
