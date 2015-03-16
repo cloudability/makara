@@ -6,12 +6,12 @@
 
 Makara is generic master/slave proxy. It handles the heavy lifting of managing, choosing, blacklisting, and cycling through connections. It comes with an ActiveRecord database adapter implementation.
 
-### Warning: *Makara was recently rewritten. < 0.2.0 configurations will need to be changed to the new format. Makara 0.2.0 is still a beta release and could use more real-world testing -- especially with postgresql setups.*
+### Warning: *Makara was recently rewritten. < 0.2.0 configurations will need to be changed to the new format. Makara 0.2.0 is still in its infancy and could use more production testing.*
 
 ## Installation
 
 ```ruby
-gem 'makara', github: 'taskrabbit/makara', tag: 'v0.2.0.beta9'
+gem 'makara', github: 'taskrabbit/makara', tag: 'v0.2.x'
 ```
 
 ## Basic Usage
@@ -63,13 +63,23 @@ Makara::Cache.store = MyRedisCacheStore.new
 
 To handle persistence of context across requests in a Rack app, makara provides a middleware. It lays a cookie named `_mkra_ctxt` which contains the current master context. If the next request is executed before the cookie expires, master will be used. If something occurs which naturally requires master on the second request, the context is changed and stored again.
 
+#### Changing Context
+
+If you need to change the makara context, releasing any stuck connections, all you have to do is:
+
+```ruby
+ctx = Makara::Context.generate # or any unique sha
+Makara::Context.set_current ctx
+```
+
+
 ### Forcing Master
 
 If you need to force master in your app then you can simply invoke stick_to_master! on your connection:
 
 ```ruby
 write_to_cache = true # or false
-proxy.stick_to_master(write_to_cache)
+proxy.stick_to_master!(write_to_cache)
 ```
 
 ## ActiveRecord Database Adapter
@@ -124,7 +134,8 @@ The makara subconfig sets up the proxy with a few of its own options, then provi
 * blacklist_duration - the number of seconds a node is blacklisted when a connection failure occurs
 * sticky - if a node should be stuck to once it's used during a specific context
 * master_ttl - how long the master context is persisted. generally, this needs to be longer than any replication lag
-* rescue_connection_failures - should Makara deal with nodes that aren't accessible when the initial connection is established
+* rescue_connection_failures - should Makara deal with nodes that aren't accessible when the initial connection is instantiated? Nodes will be blacklisted and instantiation will attempt on demand after the blacklisting.
+* connection_error_matchers - array of custom error matchers you want to be handled gracefully by Makara (as in, errors matching these regexes will result in blacklisting the connection as opposed to raising directly).
 
 Connection definitions contain any extra node-specific configurations. If the node should behave as a master you must provide `role: master`. Any previous configurations can be overridden within a specific node's config. Nodes can also contain weights if you'd like to balance usage based on hardware specifications. Optionally, you can provide a name attribute which will be used in sql logging.
 
@@ -145,7 +156,50 @@ connections:
 
 In the previous config the "Big Slave" would receive ~80% of traffic.
 
+## Custom error matchers:
+
+To enable Makara to catch and handle custom errors gracefully (blacklist the connection instead of raising directly), you must add your custom matchers to the `connection_error_matchers` setting to your config file, for example:
+
+```yml
+production:
+  adapter: 'makara_mysql2'
+
+  makara:
+    blacklist_duration: 5
+    connections:
+      - role: master
+        host: master.sql.host
+    connection_error_matchers:
+      - !ruby/regexp '/^ActiveRecord::StatementInvalid: Mysql2::Error: Unknown command:/'
+      - 'Mysql2::Error: Duplicate entry'
+```
+
+You can add strings or regexes.  In the case of strings, they will get converted to regexes when finding matches in `ActiveRecord::ConnectionAdapters::MakaraAbstractAdapter::ErrorHandler#custom_error_message?`.
+
+## Common Problems / Solutions
+
+On occasion your app may deal with a situation where makara is not present during a write but a read should use master. In the generic proxy details above you are encouraged to use `stick_to_master!` to accomplish this. Here's an example:
+
+```ruby
+# some third party creates a resource in your db, slave replication may not have completed yet
+# ...
+# then your app is told to read the resource.
+def handle_request_after_third_party_record_creation
+  CreatedResourceClass.connection.stick_to_master!
+  CreatedResourceClass.find(params[:id]) # will go to master
+end
+```
+
+Similarly, if you have a third party service which will conduct a generic request against your Rack app, you can force master via a query param:
+
+```ruby
+def send_url_to_third_party
+  context = Makara::Context.get_current
+  ThirdParty.read_from_here!("http://mysite.com/path/to/resource?_mkra_ctxt=#{context}")
+end
+```
 
 ## Todo
 
-Allow a cookie cache store to be provided by the middleware. If the cache store is set to :cookie then instantiate a cookie store based on the current request. After the response is handled ensure the store is reset to :cookie.
+* Cookie based cache store?
+* More real world examples

@@ -13,13 +13,14 @@ module ActiveRecord
           yield
 
         rescue Exception => e
-
           # do it via class name to avoid version-specific constant dependencies
           case e.class.name
           when 'ActiveRecord::RecordNotUnique', 'ActiveRecord::InvalidForeignKey'
             harshly(e)
+          when 'Makara::Errors::BlacklistConnection', 'Makara::Errors::InitialConnectionFailure'
+            harshly(e)
           else
-            if connection_message?(e)
+            if connection_message?(e) || custom_error_message?(connection, e)
               gracefully(connection, e)
             else
               harshly(e)
@@ -33,11 +34,25 @@ module ActiveRecord
           message = message.to_s.downcase
 
           case message
-          when /(closed|lost|no|terminating|terminated)\s?([^\s]+)?\sconnection/, /gone away/, /connection refused/, /could not connect/
+          when /(closed|lost|no|terminating|terminated)\s?([^\s]+)?\sconnection/i, /gone away/i, /connection[^:]+refused/i, /could not connect/i, /connection[^:]+closed/i
             true
           else
             false
           end
+        end
+
+        def custom_error_message?(connection, message)
+          custom_error_matchers = connection._makara_custom_error_matchers
+          return false if !custom_error_matchers || custom_error_matchers.empty?
+
+          message = message.to_s
+
+          custom_error_matchers.each do |matcher|
+            matcher = /#{matcher}/ if matcher.is_a? String
+            return true if message.match matcher
+          end
+
+          false
         end
 
 
@@ -49,6 +64,7 @@ module ActiveRecord
       send_to_all :connect, :disconnect!, :reconnect!, :verify!, :clear_cache!, :reset!
 
 
+      SQL_MASTER_MATCHERS     = [/^select.+for update$/i, /select.+lock in share mode$/i]
       SQL_SLAVE_MATCHER       = /^select\s/i
       SQL_ALL_MATCHER         = /^set\s/i
 
@@ -61,19 +77,28 @@ module ActiveRecord
 
       protected
 
+      def send_to_all(method_name, *args)
+        handling_an_all_execution do
+          super
+        end
+      end
+
 
       def appropriate_connection(method_name, args)
         if needed_by_all?(method_name, args)
 
-          @master_pool.each_connection do |con|
-            hijacked do
-              yield con
+          handling_an_all_execution do
+            # slave pool must run first.
+            @slave_pool.provide_each do |con|
+              hijacked do
+                yield con
+              end
             end
-          end
 
-          @slave_pool.each_connection do |con|
-            hijacked do
-              yield con
+            @master_pool.provide_each do |con|
+              hijacked do
+                yield con
+              end
             end
           end
 
@@ -84,6 +109,16 @@ module ActiveRecord
           end
 
         end
+      end
+
+      def handling_an_all_execution
+        yield
+      rescue ::Makara::Errors::NoConnectionsAvailable => e
+        raise if e.role == 'master'
+        @slave_pool.disabled = true
+        yield
+      ensure
+        @slave_pool.disabled = false
       end
 
 
@@ -98,25 +133,23 @@ module ActiveRecord
       end
 
       def needed_by_all?(method_name, args)
-        sql = args.first
-        return true if sql.to_s =~ SQL_ALL_MATCHER
+        sql = args.first.to_s
+        return true if sql =~ SQL_ALL_MATCHER
         false
       end
 
       def needs_master?(method_name, args)
-        sql = args.first
-        return true if sql.to_s =~ /for update$/i
+        sql = args.first.to_s
+        SQL_MASTER_MATCHERS.each do |master_regex|
+          return true if master_regex =~ sql
+        end
         return false if stuck_to_slaves?
-        return false if sql.to_s =~ SQL_SLAVE_MATCHER
+        return false if sql =~ SQL_SLAVE_MATCHER
         true
       end
 
       def connection_for(config)
         active_record_connection_for(config)
-      rescue Exception => e
-        raise unless @config_parser.makara_config[:rescue_connection_failures]
-        raise unless @error_handler.connection_message?(e.message)
-        nil
       end
 
       def active_record_connection_for(config)

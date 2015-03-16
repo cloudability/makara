@@ -5,7 +5,7 @@ describe ActiveRecord::ConnectionAdapters::MakaraAbstractAdapter::ErrorHandler d
 
   let(:handler){ described_class.new }
   let(:proxy) { FakeAdapter.new(config(1,1)) }
-  let(:connection){ proxy.master_pool.any }
+  let(:connection){ proxy.master_pool.connections.first }
 
   [
     %|Mysql::Error: : INSERT INTO `watchers` (`user_id`, `watchable_id`, `watchable_type`) VALUES|,
@@ -30,7 +30,9 @@ describe ActiveRecord::ConnectionAdapters::MakaraAbstractAdapter::ErrorHandler d
     %|Mysql2::Error: Lost connection to MySQL server during query: SELECT `geographies`.* FROM `geographies`|,
     %|PGError: server closed the connection unexpectedly This probably me|,
     %|Could not connect to server: Connection refused Is the server running on host|,
-    %|PG::AdminShutdown: FATAL:  terminating connection due to administrator command FATAL:  terminating connection due to administrator command|
+    %|PG::AdminShutdown: FATAL:  terminating connection due to administrator command FATAL:  terminating connection due to administrator command|,
+    %|PG::ConnectionBad: PQconsumeInput() SSL connection has been closed unexpectedly: SELECT  1 AS one FROM "users"  WHERE "users"."registration_ip" = '10.0.2.2' LIMIT 1|,
+    %|PG::UnableToSend: no connection to the server|
   ].each do |msg|
     it "should properly evaluate connection messages like: #{msg}" do
       expect(handler).to be_connection_message(msg)
@@ -43,6 +45,29 @@ describe ActiveRecord::ConnectionAdapters::MakaraAbstractAdapter::ErrorHandler d
         end
       }.to raise_error(Makara::Errors::BlacklistConnection)
     end
+  end
+
+  describe 'custom errors' do
+
+    let(:config_path) { File.join(File.expand_path('../../../', __FILE__), 'support', 'mysql2_database_with_custom_errors.yml') }
+    let(:config) { YAML.load_file(config_path)['test'] }
+    let(:handler){ described_class.new }
+    let(:proxy) { FakeAdapter.new(config) }
+    let(:connection){ proxy.master_pool.connections.first }
+    let(:msg) { "ActiveRecord::StatementInvalid: Mysql2::Error: Unknown command: SELECT `users`.* FROM `users` WHERE `users`.`id` = 53469 LIMIT 1" }
+
+    it "identifies custom errors" do
+      expect(handler).to be_custom_error_message(connection, msg)
+    end
+
+    it "blacklists the connection" do
+      expect {
+        handler.handle(connection) do
+          raise msg
+        end
+      }.to raise_error(Makara::Errors::BlacklistConnection)
+    end
+
   end
 
 
