@@ -99,7 +99,7 @@ module Makara
       cookie_value = {
         :path => '/',
         :value => "#{Makara::Context.get_current}--#{status}",
-        :http_only => true,
+        :httponly => true,
         :max_age => '5'
       }
 
